@@ -1,0 +1,286 @@
+name: stock-volatility-check
+
+# ==========================================================================
+#  株価変動アラート — この1ファイルだけで動きます
+# ==========================================================================
+#  ・監視する銘柄は、下の「WATCHLIST」に書き換えるだけです
+#  ・通知済みレベルは GitHub のキャッシュに保存します
+#    （リポジトリへの書き込み権限は不要なので、Settings の変更は要りません）
+#  ・必要な設定は Secret「STOCKALERT_NTFY_TOPIC」だけです
+# ==========================================================================
+
+on:
+  schedule:
+    - cron: "*/15 * * * *"      # 15分ごとに自動実行
+  workflow_dispatch:             # 手動実行ボタンも出す
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: 前回の状態を復元
+        uses: actions/cache/restore@v4
+        with:
+          path: state
+          key: stockalert-state-${{ github.run_id }}
+          restore-keys: |
+            stockalert-state-
+
+      - name: 株価チェックを実行
+        env:
+          NTFY_TOPIC: ${{ secrets.STOCKALERT_NTFY_TOPIC }}
+          NTFY_SERVER: ${{ secrets.STOCKALERT_NTFY_SERVER }}
+        run: |
+          mkdir -p state
+          cat > /tmp/check.py <<'PYEOF'
+          #!/usr/bin/env python3
+          """株価変動チェック（単体版・外部ライブラリ不要）
+
+          GitHub Actions のワークフローにそのまま埋め込めるよう、
+          標準ライブラリだけで動作するようにした自己完結スクリプト。
+
+          - 監視銘柄は WATCHLIST に直接書く（"7203=2900" / "7203"）
+          - 株価は Yahoo Finance の chart API から取得
+          - 基準株価から 15/20/25/30% 以上変動したら ntfy へプッシュ通知
+          - 通知済みレベルは STATE_PATH の JSON に保存（同レベルの再通知を防ぐ）
+          """
+
+          from __future__ import annotations
+
+          import json
+          import os
+          import pathlib
+          import re
+          import urllib.parse
+          import urllib.request
+
+          # ==========================================================================
+          # 設定（ここを書き換えてください）
+          # ==========================================================================
+          WATCHLIST = [
+              "7203=2900",   # 東証: 銘柄コード=基準株価
+              "6758",        # 基準株価を省略すると、初回チェック時の株価を基準にします
+              "AAPL=210",
+          ]
+
+          THRESHOLDS = [15, 20, 25, 30]        # 通知する変動率(%)
+          RENOTIFY_HOURS = 6                   # 同じレベルに留まったまま再通知する間隔(時間)
+          NOTIFY_ON_RESET = True               # 基準値圏内に戻ったときも通知するか
+
+          NTFY_TOPIC = os.environ.get("NTFY_TOPIC", "").strip()
+          NTFY_SERVER = (os.environ.get("NTFY_SERVER") or "https://ntfy.sh").rstrip("/")
+          STATE_PATH = pathlib.Path(os.environ.get("STATE_PATH", "state/state.json"))
+
+          UA = {"User-Agent": "Mozilla/5.0 (compatible; stock-alert/1.0)"}
+
+
+          # ==========================================================================
+          # 銘柄コードの正規化
+          # ==========================================================================
+          def normalize(raw: str) -> str:
+              s = re.sub(r"[\s\u3000]+", "", (raw or "").strip().upper())
+              if not s:
+                  raise ValueError("銘柄コードが空です")
+              if s.endswith(".JP"):
+                  s = s[:-3] + ".T"
+              m = re.fullmatch(r"(\d{4})(T|JT|JP)", s)
+              if m:
+                  return m.group(1) + ".T"
+              if re.fullmatch(r"\d{3}[A-Z]", s):      # 東証の英数字コード(例 160A)
+                  return s + ".T"
+              if re.fullmatch(r"\d{4}", s):           # 東証4桁
+                  return s + ".T"
+              return s
+
+
+          # ==========================================================================
+          # 株価の取得
+          # ==========================================================================
+          def fetch_price(symbol: str) -> tuple[float, str, str]:
+              url = ("https://query1.finance.yahoo.com/v8/finance/chart/"
+                     + urllib.parse.quote(symbol, safe=""))
+              query = urllib.parse.urlencode({"interval": "1m", "range": "1d"})
+              request = urllib.request.Request(f"{url}?{query}", headers=UA)
+              with urllib.request.urlopen(request, timeout=25) as response:
+                  payload = json.loads(response.read().decode("utf-8"))
+
+              result = (payload.get("chart") or {}).get("result")
+              if not result:
+                  raise RuntimeError("株価データを取得できませんでした")
+              meta = result[0].get("meta") or {}
+
+              price = meta.get("regularMarketPrice")
+              if price is None:
+                  closes = (((result[0].get("indicators") or {}).get("quote") or [{}])[0]
+                            .get("close") or [])
+                  closes = [c for c in closes if c is not None]
+                  if not closes:
+                      raise RuntimeError("現在値を取得できませんでした")
+                  price = closes[-1]
+
+              name = meta.get("longName") or meta.get("shortName") or ""
+              return float(price), str(meta.get("currency") or ""), name
+
+
+          # ==========================================================================
+          # 閾値の判定
+          # ==========================================================================
+          def highest_level(pct: float, thresholds: list[int]) -> int:
+              reached = [t for t in thresholds if abs(pct) >= t]
+              return max(reached) if reached else 0
+
+
+          # ==========================================================================
+          # 通知
+          # ==========================================================================
+          def send_ntfy(title: str, body: str, level: int) -> str:
+              if not NTFY_TOPIC:
+                  return "スキップ(トピック未設定)"
+              priority = 5 if level >= 30 else (4 if level >= 20 else 3)
+              payload = {
+                  "topic": NTFY_TOPIC,
+                  "title": title,
+                  "message": body,
+                  "priority": priority,
+                  "tags": ["rotating_light"] if level >= 25 else ["bell"],
+              }
+              request = urllib.request.Request(
+                  NTFY_SERVER,
+                  data=json.dumps(payload, ensure_ascii=False).encode("utf-8"),
+                  headers={**UA, "Content-Type": "application/json"},
+                  method="POST",
+              )
+              try:
+                  with urllib.request.urlopen(request, timeout=25) as response:
+                      return f"OK({response.status})"
+              except Exception as exc:  # noqa: BLE001
+                  return f"NG({exc})"
+
+
+          # ==========================================================================
+          # 状態の読み書き
+          # ==========================================================================
+          def load_state() -> dict:
+              if not STATE_PATH.exists():
+                  return {}
+              try:
+                  with STATE_PATH.open(encoding="utf-8") as fh:
+                      return json.load(fh)
+              except Exception:  # noqa: BLE001
+                  return {}
+
+
+          def save_state(state: dict) -> None:
+              STATE_PATH.parent.mkdir(parents=True, exist_ok=True)
+              with STATE_PATH.open("w", encoding="utf-8") as fh:
+                  json.dump(state, fh, ensure_ascii=False, indent=1, sort_keys=True)
+
+
+          # ==========================================================================
+          # メイン
+          # ==========================================================================
+          def main() -> int:
+              state = load_state()
+              now = __import__("time").time()
+              cooldown = RENOTIFY_HOURS * 3600
+
+              checked = notified = errors = 0
+              lines: list[str] = []
+
+              for entry in WATCHLIST:
+                  text = entry.split("#", 1)[0].strip()
+                  if not text:
+                      continue
+                  symbol_raw, _, price_raw = text.partition("=")
+
+                  try:
+                      symbol = normalize(symbol_raw)
+                  except ValueError as exc:
+                      lines.append(f"[ERR] {symbol_raw}: {exc}")
+                      errors += 1
+                      continue
+
+                  try:
+                      price, currency, name = fetch_price(symbol)
+                  except Exception as exc:  # noqa: BLE001
+                      lines.append(f"[ERR] {symbol}: {exc}")
+                      errors += 1
+                      continue
+
+                  checked += 1
+                  info = state.get(symbol, {})
+
+                  # 基準株価が未設定なら、初回チェック時の株価を採用して保存
+                  base = info.get("base_price")
+                  if not base:
+                      base = price
+                      info["base_price"] = base
+                      info["base_date"] = __import__("datetime").datetime.now().strftime("%Y-%m-%d")
+                      lines.append(f"[登録] {symbol} 基準株価={base:,.1f} {currency}")
+
+                  pct = (price - base) / base * 100.0
+                  level = highest_level(pct, THRESHOLDS)
+                  direction = "up" if pct >= 0 else "down"
+                  key = f"{direction}_level"
+                  prev_level = int(info.get(key, 0))
+                  last_at = float(info.get(f"{direction}_notified_at", 0))
+
+                  event = "none"
+                  if level > prev_level:
+                      event = "escalate"
+                  elif level == prev_level and level > 0 and (now - last_at) >= cooldown:
+                      event = "repeat"
+                  elif level < prev_level and level == 0 and prev_level > 0 and NOTIFY_ON_RESET:
+                      event = "reset"
+
+                  info[key] = level
+                  info["last_price"] = price
+                  info["last_change_pct"] = round(pct, 2)
+                  info["last_checked_at"] = now
+
+                  if event == "none":
+                      lines.append(f"[ok]  {symbol} {pct:+.2f}% (level {level})")
+                      state[symbol] = info
+                      continue
+
+                  if event == "reset":
+                      title = f"⚪️ {name or symbol} 基準値圏内に復帰"
+                      body = (f"基準株価 {base:,.2f} に対して {pct:+.2f}% まで戻りました。\n"
+                              f"現在値: {price:,.2f}")
+                  else:
+                      arrow = "▲" if direction == "up" else "▼"
+                      word = "上昇" if direction == "up" else "下降"
+                      suffix = "（再通知）" if event == "repeat" else ""
+                      title = f"{arrow} {name or symbol} ({symbol}) {pct:+.2f}% {word} / {level}%超{suffix}"
+                      body = (f"基準株価: {base:,.2f} {currency}\n"
+                              f"現在値  : {price:,.2f} {currency}\n"
+                              f"変動率  : {pct:+.2f}%（{level}% 以上の{word}）\n"
+                              f"判定    : {level}% 閾値を突破"
+                              + ("（エスカレーション）" if event == "escalate" else "（継続中）"))
+
+                  result = send_ntfy(title, body, level)
+                  info[f"{direction}_notified_at"] = now
+                  notified += 1
+                  lines.append(f"[!!]  {title} -> ntfy:{result}")
+                  state[symbol] = info
+
+              save_state(state)
+
+              print(f"チェック {checked} 銘柄 / 通知 {notified} 件 / エラー {errors} 件")
+              for line in lines:
+                  print("  " + line)
+              return 0
+
+
+          if __name__ == "__main__":
+              raise SystemExit(main())
+          PYEOF
+          python3 /tmp/check.py
+
+      - name: 状態を保存（次回実行へ引き継ぐ）
+        if: always()
+        uses: actions/cache/save@v4
+        with:
+          path: state
+          key: stockalert-state-${{ github.run_id }}
