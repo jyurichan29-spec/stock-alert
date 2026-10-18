@@ -1,0 +1,23 @@
+[Unit]
+Description=Stock Volatility Monitor (株価変動アラート)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+# ↓ 自分の配置先に書き換えてください
+WorkingDirectory=/opt/stock-alert
+Environment=STOCKALERT_ENABLE_SCHEDULER=true
+Environment=PORT=8000
+Environment=TZ=Asia/Tokyo
+# 通知先はここで環境変数として渡すか、Web 画面の設定から登録してください
+# Environment=STOCKALERT_NTFY_TOPIC=stock-alert-xxxxxxxx
+ExecStart=/usr/bin/python3 /opt/stock-alert/run.py
+Restart=always
+RestartSec=10
+User=www-data
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target

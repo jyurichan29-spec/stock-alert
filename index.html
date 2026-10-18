@@ -1,0 +1,216 @@
+{% extends "base.html" %}
+{% block title %}監視リスト / 株価変動アラート{% endblock %}
+
+{% block strip %}
+<div class="strip">
+  <div class="cell"><span class="pulse"></span> 監視中 <b>{{ rows|length }}</b> 銘柄</div>
+  <div class="cell">閾値到達 <b id="st-active">{{ rows|selectattr('level','gt',0)|list|length }}</b> 銘柄</div>
+  <div class="cell">通知先 <b>{{ channels|length }}</b> チャネル{% if not channels %}<span class="badge err">未設定</span>{% endif %}</div>
+  <div class="cell">最終チェック <b id="st-last">{{ rows|map(attribute='last_checked_str')|select('ne','—')|list|last or '—' }}</b></div>
+  <div class="cell" id="st-market">{{ market }}</div>
+  <form method="post" action="{{ url_for('check_now') }}">
+    <button class="btn primary sm" type="submit">今すぐチェック</button>
+  </form>
+</div>
+{% endblock %}
+
+{% block body %}
+<div class="grid">
+  <div>
+    <div class="card">
+      <h2>監視リスト <span class="cnt" id="st-count">{{ rows|length }}</span>
+        <span class="legend">基準株価 → 現在値 の順に表示／変動率は基準株価との比較</span>
+      </h2>
+      <div class="rows">
+        <div class="row head">
+          <div>銘柄</div><div>基準株価</div><div>現在値</div><div>変動率</div>
+          <div>閾値ラダー</div><div>状態</div><div></div>
+        </div>
+        {% for r in rows %}
+        <div class="row {{ 'off' if not r.enabled }} {{ 'hot' if r.level > 0 }}">
+          <div>
+            <span class="lbl">銘柄</span>
+            <span class="sym">{{ r.symbol }}</span>
+            <span class="nm">{{ r.name or '—' }}</span>
+          </div>
+          <div><span class="lbl">基準株価</span><span class="px" title="基準株価（登録時に設定した比較の基準）">{{ r.base_price_str }}</span></div>
+          <div><span class="lbl">現在値</span><span class="px" title="現在値（直近のチェックで取得した株価）">{{ r.last_price_str }}</span></div>
+          <div>
+            <span class="lbl">変動率</span>
+            <span class="chg {{ r.dir }}" title="変動率（基準株価に対する増減）">{{ '▲' if r.dir == 'up' else ('▼' if r.dir == 'down' else '') }}{{ r.change_str }}</span>
+          </div>
+          <div>
+            <span class="lbl">閾値ラダー</span>
+            <div class="ladder {{ r.dir if r.dir != 'flat' else 'up' }}" title="閾値: {{ r.threshold_list|join('/') }}%">
+              {% for t in r.threshold_list %}
+              <span class="t {{ 'on' if t <= r.level }} {{ 'now' if t == r.level }}">{{ t }}</span>
+              {% endfor %}
+            </div>
+          </div>
+          <div>
+            <span class="lbl">状態</span>
+            {% if r.last_error %}<span class="badge err" title="{{ r.last_error }}">取得エラー</span>
+            {% elif r.level > 0 %}<span class="badge {{ r.dir }}">{{ r.dir == 'up' and '上昇' or '下降' }} {{ r.level }}%超</span>
+            {% elif r.last_price is none %}<span class="badge">未取得</span>
+            {% else %}<span class="badge">基準値圏内</span>{% endif %}
+            {% if not r.enabled %}<span class="badge">停止中</span>{% endif %}
+          </div>
+          <div class="acts">
+            <form method="post" action="{{ url_for('toggle_watch', symbol=r.symbol) }}">
+              <button class="btn sm ghost" type="submit" title="{{ '再開' if not r.enabled else '一時停止' }}">{{ '再開' if not r.enabled else '停止' }}</button>
+            </form>
+            <form method="post" action="{{ url_for('reset_watch', symbol=r.symbol) }}">
+              <button class="btn sm ghost" type="submit" title="通知済みレベルをクリア">リセット</button>
+            </form>
+            <form method="post" action="{{ url_for('delete_watch', symbol=r.symbol) }}"
+                  onsubmit="return confirm('{{ r.symbol }} を削除しますか？')">
+              <button class="btn sm danger" type="submit">削除</button>
+            </form>
+          </div>
+        </div>
+        {% else %}
+        <div class="empty">
+          <strong>監視銘柄がまだありません</strong>
+          右のフォームから銘柄コードと基準株価を登録してください。
+        </div>
+        {% endfor %}
+      </div>
+    </div>
+
+    {% if alerts %}
+    <div class="sec">直近のアラート</div>
+    <div class="card">
+      {% for a in alerts %}
+      <div class="al">
+        <div class="t">{{ a.title }}</div>
+        <div class="m">{{ a.message }}</div>
+        <div class="meta">
+          <span>{{ a.created_at|dt }}</span>
+          <span>基準 {{ '%.1f'|format(a.base_price) }} → {{ '%.1f'|format(a.price) }}</span>
+          <span>{{ a.level }}%閾値 / {{ a.event }}</span>
+          <span>送信: {{ a.channels or '—' }}</span>
+        </div>
+      </div>
+      {% endfor %}
+    </div>
+    {% endif %}
+  </div>
+
+  <div>
+    <div class="card">
+      <h2>銘柄を登録</h2>
+      <div class="pad">
+        <form method="post" action="{{ url_for('add_watch') }}">
+          <div class="f">
+            <label for="symbol">銘柄コード</label>
+            <input type="text" id="symbol" name="symbol" placeholder="7203 / AAPL / 6758.T" required autocomplete="off">
+            <div class="hint">
+              東証は <code>7203</code> と4桁で入力すると <code>7203.T</code> に自動変換します。<br>
+              米国株は <code>AAPL</code>、他市場は <code>0700.HK</code>（香港）のように市場コードを付けてください。
+            </div>
+          </div>
+          <div class="f">
+            <label for="name">銘柄名（任意）</label>
+            <input type="text" id="name" name="name" placeholder="トヨタ自動車">
+          </div>
+          <div class="f">
+            <label for="base_price">基準株価</label>
+            <input type="text" class="num" id="base_price" name="base_price" placeholder="空欄なら登録時の現在値を使用" inputmode="decimal">
+            <div class="hint" id="quote-hint">空欄のまま登録すると、登録時点の株価を基準株価にします。</div>
+            <button type="button" class="btn sm ghost" id="use-quote" style="margin-top:8px" hidden>↑ この現在値を基準株価に入れる</button>
+          </div>
+          <div class="two">
+            <div class="f">
+              <label for="thresholds">閾値 (%)</label>
+              <input type="text" class="num" id="thresholds" name="thresholds" value="{{ default_thresholds }}">
+            </div>
+            <div class="f">
+              <label for="direction">通知方向</label>
+              <select id="direction" name="direction">
+                <option value="both" {{ 'selected' if default_direction=='both' }}>上下とも</option>
+                <option value="up" {{ 'selected' if default_direction=='up' }}>上昇のみ</option>
+                <option value="down" {{ 'selected' if default_direction=='down' }}>下降のみ</option>
+              </select>
+            </div>
+          </div>
+          <div class="f">
+            <label for="note">メモ（任意）</label>
+            <input type="text" id="note" name="note" placeholder="購入検討 / 損切りライン など">
+          </div>
+          <button class="btn primary" type="submit" style="width:100%">監視リストに追加</button>
+        </form>
+      </div>
+    </div>
+
+    <div class="card" style="margin-top:20px">
+      <h2>通知の状態</h2>
+      <div class="pad" style="font-size:13px">
+        {% if channels %}
+          {% for c in channels %}<span class="badge up" style="margin:0 6px 6px 0">{{ c }}</span>{% endfor %}
+        {% else %}
+          <div class="flash err" style="margin:0">通知チャネルが未設定です。アラートを検知してもスマホに届きません。<br>
+          <a href="{{ url_for('settings_page') }}">設定画面</a> で通知先を設定してください。</div>
+        {% endif %}
+        <div class="hint" style="margin-top:12px">
+          次回チェック:
+          {% if sched.running %}
+            <b class="num">{{ sched.next_run[:16].replace('T',' ') }} UTC</b>（{{ sched.interval_minutes }}分間隔）
+          {% else %}停止中{% endif %}
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script>
+(function () {
+  var sym = document.getElementById('symbol');
+  var hint = document.getElementById('quote-hint');
+  var name = document.getElementById('name');
+  var base = document.getElementById('base_price');
+  var useBtn = document.getElementById('use-quote');
+  if (!sym) return;
+
+  var DEFAULT_HINT = '空欄のまま登録すると、登録時点の株価を基準株価にします。';
+  var t = null;
+  var lastPrice = null;
+
+  function reset() {
+    hint.textContent = DEFAULT_HINT;
+    if (useBtn) useBtn.hidden = true;
+    lastPrice = null;
+  }
+
+  sym.addEventListener('input', function () {
+    clearTimeout(t);
+    var v = sym.value.trim();
+    reset();
+    if (v.length < 2) return;
+    hint.textContent = '照会中…';
+    t = setTimeout(function () {
+      fetch('{{ url_for("api_quote") }}?symbol=' + encodeURIComponent(v))
+        .then(function (r) { return r.json().then(function (j) { return { ok: r.ok, j: j }; }); })
+        .then(function (res) {
+          if (!res.ok) { hint.textContent = '取得できません: ' + res.j.error; return; }
+          var j = res.j;
+          lastPrice = j.price;
+          hint.innerHTML = '参考情報: 現在値 <b>' + j.price.toLocaleString() + ' ' + j.currency +
+                           '</b>（' + (j.name || j.symbol) + '）<br>※ 上の基準株価の入力欄は変更していません。';
+          if (!name.value) name.value = j.name || '';
+          if (useBtn) useBtn.hidden = false;
+        })
+        .catch(function () { hint.textContent = '照会に失敗しました。'; });
+    }, 450);
+  });
+
+  if (useBtn) {
+    useBtn.addEventListener('click', function () {
+      if (lastPrice === null) return;
+      base.value = lastPrice;
+      hint.innerHTML = '基準株価に <b>' + lastPrice.toLocaleString() + '</b> を設定しました。';
+      useBtn.hidden = true;
+    });
+  }
+})();
+</script>
+{% endblock %}

@@ -1,0 +1,8 @@
+# 必須
+requests>=2.31.0
+Flask>=3.0.0
+APScheduler>=3.10.4
+tzdata>=2024.1
+
+# 任意（Yahoo Finance が失敗したときのフォールバック取得に使用）
+# yfinance>=0.2.40

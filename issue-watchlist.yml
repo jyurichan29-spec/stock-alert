@@ -1,0 +1,81 @@
+name: watchlist-from-issue
+
+# 「銘柄を登録・削除」フォーム（Issue）の内容を watchlist.txt に反映する。
+on:
+  issues:
+    types: [opened, edited]
+
+permissions:
+  contents: write   # watchlist.txt をコミットするため
+  issues: write     # 結果を issue にコメントして閉じるため
+
+concurrency:
+  group: watchlist-issue
+  cancel-in-progress: false
+
+jobs:
+  register:
+    # フォームから作られた issue だけを対象にし、リポジトリ所有者以外は無視する
+    if: >-
+      startsWith(github.event.issue.title, '[銘柄登録]') &&
+      github.event.issue.user.login == github.repository_owner
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: 依存関係をインストール
+        run: pip install -r requirements.txt
+
+      - name: Issue の内容を watchlist.txt に反映
+        id: apply
+        env:
+          ISSUE_BODY: ${{ github.event.issue.body }}
+        run: |
+          set -e
+          printf '%s' "$ISSUE_BODY" > /tmp/issue_body.md
+          if python3 scripts/issue_to_watchlist.py \
+               --body-file /tmp/issue_body.md \
+               --watchlist watchlist.txt \
+               --summary /tmp/summary.md; then
+            echo "ok=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "ok=false" >> "$GITHUB_OUTPUT"
+          fi
+          echo "----- 反映内容 -----"
+          cat /tmp/summary.md || true
+
+      - name: コミットして保存
+        if: steps.apply.outputs.ok == 'true'
+        run: |
+          git config user.name  "stock-alert-bot"
+          git config user.email "actions@users.noreply.github.com"
+          git add -f watchlist.txt
+          git diff --cached --quiet || git commit -m "chore: update watchlist from issue #${{ github.event.issue.number }} [skip ci]"
+          git push
+
+      - name: 結果を issue にコメント
+        if: always()
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          {
+            echo "## 反映結果"
+            echo
+            cat /tmp/summary.md 2>/dev/null || echo "処理に失敗しました。"
+            echo
+            echo "---"
+            echo "※ 書き込み権限がない場合は Settings → Actions → General → Workflow permissions を「Read and write permissions」にしてください。"
+          } > /tmp/comment.md
+          gh issue comment "${{ github.event.issue.number }}" --body-file /tmp/comment.md
+
+      - name: 成功したら issue を閉じる
+        if: steps.apply.outputs.ok == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: gh issue close "${{ github.event.issue.number }}" --reason completed

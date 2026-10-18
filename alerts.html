@@ -1,0 +1,33 @@
+{% extends "base.html" %}
+{% block title %}アラート履歴 / 株価変動アラート{% endblock %}
+
+{% block strip %}
+<div class="strip">
+  <div class="cell">記録件数 <b>{{ alerts|length }}</b> 件（最新300件）</div>
+  <div class="cell">通知先 <b>{{ settings.channel_ntfy == 'true' or settings.channel_telegram == 'true' or settings.channel_line == 'true' or settings.channel_discord == 'true' or settings.channel_slack == 'true' or settings.channel_webhook == 'true' or settings.channel_email == 'true' }}</b></div>
+</div>
+{% endblock %}
+
+{% block body %}
+<div class="card">
+  <h2>アラート履歴</h2>
+  {% for a in alerts %}
+  <div class="al">
+    <div class="t">{{ a.title }}</div>
+    <div class="m">{{ a.message }}</div>
+    <div class="meta">
+      <span>{{ a.created_at|dt('%Y/%m/%d %H:%M:%S') }}</span>
+      <span>{{ a.symbol }}{% if a.name %} / {{ a.name }}{% endif %}</span>
+      <span>変動率 {{ '%+.2f'|format(a.change_pct) }}%</span>
+      <span>{{ a.level }}% 閾値・{{ a.event }}</span>
+      <span>送信: {{ a.channels or '—' }}</span>
+    </div>
+  </div>
+  {% else %}
+  <div class="empty">
+    <strong>アラートはまだありません</strong>
+    閾値を超える変動を検知すると、ここに履歴が残ります。
+  </div>
+  {% endfor %}
+</div>
+{% endblock %}

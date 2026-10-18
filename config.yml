@@ -1,0 +1,5 @@
+blank_issues_enabled: false
+contact_links:
+  - name: 監視リストを直接編集する
+    url: https://github.com
+    about: watchlist.txt を直接編集する場合は、リポジトリの watchlist.txt を開いて鉛筆アイコンから編集できます。

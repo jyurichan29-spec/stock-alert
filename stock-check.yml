@@ -1,0 +1,90 @@
+name: stock-volatility-check
+
+# GitHub Actions の cron は最短 5 分間隔。混雑時は数分〜十数分遅れることがあります。
+on:
+  schedule:
+    - cron: "*/15 * * * *"
+  workflow_dispatch:
+    inputs:
+      force:
+        description: "取引時間外でも実行する"
+        type: boolean
+        default: true
+
+# state/state.json をリポジトリへコミットするために書き込み権限が必要です。
+# あわせて Settings → Actions → General → Workflow permissions を
+# 「Read and write permissions」に変更してください（初回のみ）。
+permissions:
+  contents: write
+
+concurrency:
+  group: stock-check
+  cancel-in-progress: false
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: 依存関係をインストール
+        run: pip install -r requirements.txt
+
+      - name: 通知先の設定を確認
+        env:
+          NTFY_TOPIC: ${{ secrets.STOCKALERT_NTFY_TOPIC }}
+          TG_TOKEN: ${{ secrets.STOCKALERT_TELEGRAM_BOT_TOKEN }}
+        run: |
+          if [ -z "$NTFY_TOPIC" ] && [ -z "$TG_TOKEN" ]; then
+            echo "::warning::通知先が未設定です。Settings → Secrets and variables → Actions で STOCKALERT_NTFY_TOPIC を登録してください。アラートは検知されますが通知は送られません。"
+          fi
+
+      - name: 監視銘柄を登録（watchlist.txt の内容を反映）
+        run: |
+          python3 scripts/check_once.py \
+            --seed-file watchlist.txt \
+            --state-file state/state.json \
+            --seed-only
+
+      - name: 状態を保存できるか確認（初回の権限チェック）
+        run: |
+          git config user.name  "stock-alert-bot"
+          git config user.email "actions@users.noreply.github.com"
+          git add -f state/state.json watchlist.txt
+          git diff --cached --quiet || git commit -m "chore: init alert state [skip ci]"
+          if ! git push; then
+            echo "::error::リポジトリへ書き込みできません。Settings → Actions → General → Workflow permissions で「Read and write permissions」を選んで Save してください。通知の重複を防ぐため、この実行はチェックを行わずに中止します。"
+            exit 1
+          fi
+
+      - name: 株価チェックを実行
+        env:
+          STOCKALERT_NTFY_TOPIC: ${{ secrets.STOCKALERT_NTFY_TOPIC }}
+          STOCKALERT_NTFY_SERVER: ${{ secrets.STOCKALERT_NTFY_SERVER }}
+          STOCKALERT_NTFY_TOKEN: ${{ secrets.STOCKALERT_NTFY_TOKEN }}
+          STOCKALERT_TELEGRAM_BOT_TOKEN: ${{ secrets.STOCKALERT_TELEGRAM_BOT_TOKEN }}
+          STOCKALERT_TELEGRAM_CHAT_ID: ${{ secrets.STOCKALERT_TELEGRAM_CHAT_ID }}
+          STOCKALERT_DISCORD_WEBHOOK_URL: ${{ secrets.STOCKALERT_DISCORD_WEBHOOK_URL }}
+          STOCKALERT_SLACK_WEBHOOK_URL: ${{ secrets.STOCKALERT_SLACK_WEBHOOK_URL }}
+          STOCKALERT_LINE_TOKEN: ${{ secrets.STOCKALERT_LINE_TOKEN }}
+          STOCKALERT_LINE_TO: ${{ secrets.STOCKALERT_LINE_TO }}
+          STOCKALERT_GENERIC_WEBHOOK_URL: ${{ secrets.STOCKALERT_GENERIC_WEBHOOK_URL }}
+        run: |
+          if [ "${{ github.event_name }}" = "schedule" ]; then
+            python3 scripts/check_once.py --state-file state/state.json
+          else
+            python3 scripts/check_once.py --state-file state/state.json --force
+          fi
+
+      - name: 状態を保存（次回実行へ引き継ぐ）
+        if: always()
+        run: |
+          git add -f state/state.json
+          git diff --cached --quiet || git commit -m "chore: update alert state [skip ci]"
+          git push

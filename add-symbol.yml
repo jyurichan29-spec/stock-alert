@@ -1,0 +1,51 @@
+name: 銘柄を登録・削除
+description: 監視する銘柄を追加・変更・削除します（GitHub 上で完結・自動反映）
+title: "[銘柄登録] "
+labels: ["watchlist"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        下の項目を入力して **「Submit new issue」** を押すだけで、監視リストに反映されます。
+        反映後は自動でこの画面に結果が書き込まれ、issue が閉じられます。
+
+        - 東証の銘柄は `7203` のように4桁で入力します（自動で `7203.T` になります）
+        - 米国株は `AAPL`、香港株は `0700.HK` のように市場コードを付けます
+        - 基準株価を空欄にすると、登録時点の株価が基準になります
+
+  - type: dropdown
+    id: action
+    attributes:
+      label: 操作
+      description: 追加・更新（基準株価の変更）または削除を選びます
+      options:
+        - 追加・更新
+        - 削除
+    validations:
+      required: true
+
+  - type: input
+    id: symbol
+    attributes:
+      label: 銘柄コード
+      description: 例）7203 / 6758 / AAPL / 0700.HK
+      placeholder: "7203"
+    validations:
+      required: true
+
+  - type: input
+    id: base_price
+    attributes:
+      label: 基準株価
+      description: 空欄なら現在値を基準にします（削除のときは空欄でOK）
+      placeholder: "2900"
+    validations:
+      required: false
+
+  - type: textarea
+    id: note
+    attributes:
+      label: メモ（任意）
+      description: 購入検討・損切りラインなど、自由記入
+    validations:
+      required: false

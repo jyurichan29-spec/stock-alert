@@ -1,0 +1,15 @@
+__pycache__/
+*.py[cod]
+data/
+*.db
+*.db-wal
+*.db-shm
+.env
+.venv/
+venv/
+state/*.json
+# GitHub Actions が通知済みレベルを引き継ぐために state.json だけは追跡する
+!state/state.json
+!state/.gitkeep
+.DS_Store
+*.log

@@ -1,0 +1,186 @@
+{% extends "base.html" %}
+{% block title %}設定 / 株価変動アラート{% endblock %}
+
+{% block strip %}
+<div class="strip">
+  <div class="cell">
+    {% if sched.running %}
+      <span class="pulse"></span> スケジューラ稼働中 <b>{{ sched.interval_minutes }}分間隔</b>
+    {% else %}
+      <span class="badge err">スケジューラ停止中</span>
+    {% endif %}
+  </div>
+  <div class="cell">次回実行 <b>{{ sched.next_run[:16].replace('T',' ') if sched.next_run else '—' }}</b> UTC</div>
+</div>
+{% endblock %}
+
+{% block body %}
+<form method="post" action="{{ url_for('settings_page') }}">
+
+  <div class="sec">監視の動作</div>
+  <div class="card">
+    <div class="pad">
+      <div class="two">
+        <div class="f">
+          <label for="poll_interval_minutes">チェック間隔（分）</label>
+          <input type="number" class="num" id="poll_interval_minutes" name="poll_interval_minutes"
+                 value="{{ settings.poll_interval_minutes }}" min="1" max="1440">
+          <div class="hint">保存するとスケジューラを再起動し、この間隔で株価を取得します。</div>
+        </div>
+        <div class="f">
+          <label for="renotify_cooldown_minutes">同レベル再通知の間隔（分）</label>
+          <input type="number" class="num" id="renotify_cooldown_minutes" name="renotify_cooldown_minutes"
+                 value="{{ settings.renotify_cooldown_minutes }}" min="0">
+          <div class="hint">同じ閾値に留まっている間、この時間が経過するごとに再通知します。</div>
+        </div>
+      </div>
+      <div class="two">
+        <div class="f">
+          <label for="default_thresholds">既定の閾値（%）</label>
+          <input type="text" class="num" id="default_thresholds" name="default_thresholds"
+                 value="{{ settings.default_thresholds }}">
+          <div class="hint">カンマ区切り。銘柄ごとに個別指定もできます。</div>
+        </div>
+        <div class="f">
+          <label for="timezone">表示タイムゾーン</label>
+          <input type="text" id="timezone" name="timezone" value="{{ settings.timezone }}">
+        </div>
+      </div>
+      <div class="f">
+        <label class="chk"><input type="checkbox" name="respect_market_hours"
+          {{ 'checked' if settings.respect_market_hours == 'true' }}> 取引時間外はチェックをスキップする</label>
+        <div class="hint">東証 9:00–11:30 / 12:30–15:00、米国市場 9:30–16:00（現地時間）を判定します。「今すぐチェック」は強制実行されます。</div>
+      </div>
+      <div class="f">
+        <label class="chk"><input type="checkbox" name="notify_on_reset"
+          {{ 'checked' if settings.notify_on_reset == 'true' }}> 基準値圏内に戻ったときも通知する</label>
+      </div>
+    </div>
+  </div>
+
+  <div class="sec">通知チャネル</div>
+
+  <fieldset>
+    <legend>ntfy（推奨・最も簡単）</legend>
+    <div class="f">
+      <label class="chk"><input type="checkbox" name="channel_ntfy"
+        {{ 'checked' if settings.channel_ntfy == 'true' }}> ntfy で通知する</label>
+    </div>
+    <div class="two">
+      <div class="f">
+        <label for="ntfy_topic">トピック名</label>
+        <input type="text" id="ntfy_topic" name="ntfy_topic" value="{{ settings.ntfy_topic }}"
+               placeholder="my-stock-alert-8f3k2" autocomplete="off">
+      </div>
+      <div class="f">
+        <label for="ntfy_server">サーバー</label>
+        <input type="text" id="ntfy_server" name="ntfy_server" value="{{ settings.ntfy_server }}">
+      </div>
+    </div>
+    <div class="f">
+      <label for="ntfy_token">アクセストークン（任意・トピックを保護する場合）</label>
+      <input type="password" id="ntfy_token" name="ntfy_token" value="{{ settings.ntfy_token }}" autocomplete="off">
+    </div>
+    <div class="hint">
+      スマホに <b>ntfy</b> アプリ（iOS / Android・無料）を入れ、「トピックを購読」で上と同じトピック名を入力するだけです。
+      推測されにくい名前（例 <code>stock-alert-8f3k2</code>）にしてください。
+    </div>
+  </fieldset>
+
+  <fieldset>
+    <legend>Telegram</legend>
+    <div class="f">
+      <label class="chk"><input type="checkbox" name="channel_telegram"
+        {{ 'checked' if settings.channel_telegram == 'true' }}> Telegram で通知する</label>
+    </div>
+    <div class="two">
+      <div class="f">
+        <label for="telegram_bot_token">Bot Token</label>
+        <input type="password" id="telegram_bot_token" name="telegram_bot_token"
+               value="{{ settings.telegram_bot_token }}" autocomplete="off" placeholder="123456:ABC-DEF...">
+      </div>
+      <div class="f">
+        <label for="telegram_chat_id">Chat ID</label>
+        <input type="text" id="telegram_chat_id" name="telegram_chat_id" value="{{ settings.telegram_chat_id }}">
+      </div>
+    </div>
+    <div class="hint">@BotFather で Bot を作成し、Bot に話しかけた後 <code>https://api.telegram.org/bot&lt;token&gt;/getUpdates</code> で chat_id を確認します。</div>
+  </fieldset>
+
+  <fieldset>
+    <legend>LINE（Messaging API）</legend>
+    <div class="f">
+      <label class="chk"><input type="checkbox" name="channel_line"
+        {{ 'checked' if settings.channel_line == 'true' }}> LINE で通知する</label>
+    </div>
+    <div class="two">
+      <div class="f">
+        <label for="line_channel_access_token">チャネルアクセストークン</label>
+        <input type="password" id="line_channel_access_token" name="line_channel_access_token"
+               value="{{ settings.line_channel_access_token }}" autocomplete="off">
+      </div>
+      <div class="f">
+        <label for="line_to">送信先ユーザーID</label>
+        <input type="text" id="line_to" name="line_to" value="{{ settings.line_to }}" placeholder="Uxxxxxxxx">
+      </div>
+    </div>
+    <div class="hint">LINE Official Account の Messaging API チャネルが必要です（プッシュ送信のため無料枠に上限があります）。</div>
+  </fieldset>
+
+  <fieldset>
+    <legend>Discord / Slack</legend>
+    <div class="two">
+      <div class="f">
+        <label class="chk"><input type="checkbox" name="channel_discord"
+          {{ 'checked' if settings.channel_discord == 'true' }}> Discord Webhook</label>
+        <input type="password" name="discord_webhook_url" value="{{ settings.discord_webhook_url }}"
+               placeholder="https://discord.com/api/webhooks/..." autocomplete="off">
+      </div>
+      <div class="f">
+        <label class="chk"><input type="checkbox" name="channel_slack"
+          {{ 'checked' if settings.channel_slack == 'true' }}> Slack Incoming Webhook</label>
+        <input type="password" name="slack_webhook_url" value="{{ settings.slack_webhook_url }}"
+               placeholder="https://hooks.slack.com/services/..." autocomplete="off">
+      </div>
+    </div>
+  </fieldset>
+
+  <fieldset>
+    <legend>汎用 Webhook / メール</legend>
+    <div class="f">
+      <label class="chk"><input type="checkbox" name="channel_webhook"
+        {{ 'checked' if settings.channel_webhook == 'true' }}> 汎用 Webhook（JSON POST）</label>
+      <input type="password" name="generic_webhook_url" value="{{ settings.generic_webhook_url }}"
+             placeholder="https://hooks.zapier.com/..." autocomplete="off">
+      <div class="hint">Zapier / Make / IFTTT 経由で任意のアプリへ転送できます。</div>
+    </div>
+    <div class="f">
+      <label class="chk"><input type="checkbox" name="channel_email"
+        {{ 'checked' if settings.channel_email == 'true' }}> メール（SMTP）</label>
+    </div>
+    <div class="two">
+      <div class="f"><label for="smtp_host">SMTP ホスト</label>
+        <input type="text" id="smtp_host" name="smtp_host" value="{{ settings.smtp_host }}"></div>
+      <div class="f"><label for="smtp_port">ポート</label>
+        <input type="text" class="num" id="smtp_port" name="smtp_port" value="{{ settings.smtp_port }}"></div>
+      <div class="f"><label for="smtp_user">ユーザー</label>
+        <input type="text" id="smtp_user" name="smtp_user" value="{{ settings.smtp_user }}" autocomplete="off"></div>
+      <div class="f"><label for="smtp_password">パスワード</label>
+        <input type="password" id="smtp_password" name="smtp_password" value="{{ settings.smtp_password }}" autocomplete="off"></div>
+      <div class="f"><label for="smtp_from">From</label>
+        <input type="text" id="smtp_from" name="smtp_from" value="{{ settings.smtp_from }}"></div>
+      <div class="f"><label for="smtp_to">To</label>
+        <input type="text" id="smtp_to" name="smtp_to" value="{{ settings.smtp_to }}"></div>
+    </div>
+    <div class="f">
+      <label class="chk"><input type="checkbox" name="smtp_starttls"
+        {{ 'checked' if settings.smtp_starttls == 'true' }}> STARTTLS を使う（オフで SSL 直結）</label>
+    </div>
+  </fieldset>
+
+  <div style="display:flex;gap:10px;flex-wrap:wrap">
+    <button class="btn primary" type="submit">設定を保存</button>
+    <button class="btn" type="submit" formaction="{{ url_for('notify_test') }}" formnovalidate>テスト通知を送る</button>
+  </div>
+</form>
+{% endblock %}

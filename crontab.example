@@ -1,0 +1,7 @@
+# 15分ごとに単発チェックを実行する（スケジューラを使わない構成）
+# crontab -e でこのファイルの内容を登録してください。パスは自分の環境に合わせて変更します。
+
+*/15 * * * * cd /opt/stock-alert && /usr/bin/python3 scripts/check_once.py >> data/cron.log 2>&1
+
+# 取引時間外も含めて毎回チェックしたい場合は --force を付けます
+# */15 * * * * cd /opt/stock-alert && /usr/bin/python3 scripts/check_once.py --force >> data/cron.log 2>&1

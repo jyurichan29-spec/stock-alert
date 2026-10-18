@@ -1,0 +1,16 @@
+services:
+  stock-alert:
+    build: .
+    container_name: stock-alert
+    restart: unless-stopped
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./data:/app/data
+    environment:
+      TZ: Asia/Tokyo
+      STOCKALERT_POLL_INTERVAL: "15"
+      # 通知先はここで渡すか、Web 画面の設定から登録してください
+      # STOCKALERT_NTFY_TOPIC: "stock-alert-xxxxxxxx"
+      # STOCKALERT_TELEGRAM_BOT_TOKEN: ""
+      # STOCKALERT_TELEGRAM_CHAT_ID: ""
